@@ -1,5 +1,5 @@
 import { test, expect } from 'claude-code/testing'
-import { bar, gradient, modeOnly, modelName, toUsage } from './register'
+import { bar, gradient, modeOnly, modelName, timeLeft, toUsage } from './register'
 
 test('bar fills in half cells', () => {
   expect(bar(0)).toEqual({ fill: '', track: '──────────' })
@@ -43,4 +43,14 @@ test('modeOnly drops the shortcut hints', () => {
   expect(modeOnly('⏸ plan mode on (shift+tab to cycle)')).toBe('⏸ plan')
   expect(modeOnly('⏵⏵ accept edits on (shift+tab to cycle)')).toBe('⏵⏵ edits')
   expect(modeOnly('⏵⏵ bypass permissions on (shift+tab to cycle)')).toBe('⏵⏵ bypass')
+})
+
+test('timeLeft counts down to the reset', () => {
+  const now = Date.parse('2026-10-22T15:12:00Z')
+  expect(timeLeft('2026-10-22T15:12:30Z', now)).toBe('1m')
+  expect(timeLeft('2026-10-22T15:50:00Z', now)).toBe('38m')
+  expect(timeLeft('2026-10-22T18:30:00Z', now)).toBe('3h18m')
+  expect(timeLeft('2026-10-24T20:12:00Z', now)).toBe('2d5h')
+  expect(timeLeft('2026-10-22T10:00:00Z', now)).toBe('0m')
+  expect(timeLeft(undefined, now)).toBe('')
 })

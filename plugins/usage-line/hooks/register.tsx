@@ -70,6 +70,17 @@ export const bar = (pct: number, cells = BAR_CELLS) => {
   return { fill, track: '─'.repeat(cells - fill.length) }
 }
 
+// `2026-10-22T18:30:00Z` seen at 15:12 reads as `3h18m`; days kick in past 24h (`2d5h`).
+export const timeLeft = (resetsAt: string | undefined, now = Date.now()) => {
+  const at = resetsAt ? Date.parse(resetsAt) : NaN
+  if (Number.isNaN(at)) return ''
+  const mins = Math.max(0, Math.ceil((at - now) / 60000))
+  if (mins < 60) return `${mins}m`
+  const h = Math.floor(mins / 60)
+  if (h < 24) return `${h}h${String(mins % 60).padStart(2, '0')}m`
+  return `${Math.floor(h / 24)}d${h % 24}h`
+}
+
 const MODES: Record<string, string> = { 'accept edits': 'edits', 'bypass permissions': 'bypass' }
 
 // `⏵⏵ auto mode on (shift+tab to cycle) · esc to …` reads as `⏵⏵ auto`.
@@ -149,13 +160,14 @@ export const register: Register = on => {
     const modelLabel = await read($, model)
     const t = ease(Math.min(1, (f - (await read($, animFrom))) / EASE_FRAMES))
 
-    const meter = (key: string, label: string, pct: number, from: number | undefined) => {
+    const meter = (key: string, label: string, pct: number, from: number | undefined, resetsAt?: string) => {
       const shown = lerp(from, pct, t)
       const { fill, track } = bar(shown)
       // While a turn runs, a soft highlight sweeps along the filled part.
       const glint = working ? (f % (fill.length + 6)) - 1 : -9
       const glow = (i: number) => Math.max(0, 0.55 - Math.abs(i - glint) * 0.25)
       const tip = gradient(shown / 100)
+      const left = timeLeft(resetsAt)
       return (
         <Text key={key}>
           <Text color="subtle">{label} </Text>
@@ -167,6 +179,7 @@ export const register: Register = on => {
             {' '}
             {Math.round(shown)}%
           </Text>
+          {left ? <Text color="subtle"> {left}</Text> : null}
         </Text>
       )
     }
@@ -179,7 +192,7 @@ export const register: Register = on => {
     }
     for (const l of u.limits) {
       const before = old?.limits.find((o: Limit) => o.kind === l.kind)?.percent
-      parts.push(meter(l.kind, LABELS[l.kind] ?? l.kind, l.percent, before))
+      parts.push(meter(l.kind, LABELS[l.kind] ?? l.kind, l.percent, before, l.resetsAt))
     }
     if (u.usd !== undefined) {
       parts.push(
