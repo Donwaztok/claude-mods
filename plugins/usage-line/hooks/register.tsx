@@ -150,8 +150,14 @@ export const register: Register = on => {
   })
 
   on('ui.render', { component: 'PromptHint' }, async ($, e, next) => {
-    const u = await read($, usage)
-    if (!u) return next(e)
+    let u = await read($, usage)
+    // A resumed session starts with empty state and no measure until a limit moves.
+    if (!u) {
+      await refreshModel($)
+      await measure($, toUsage(await $.session.usage()))
+      u = await read($, usage)
+      if (!u) return next(e)
+    }
 
     const { Box, Text } = $.ui.resolve(e)
     const f = await read($, frame)
