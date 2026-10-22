@@ -1,0 +1,46 @@
+import { test, expect } from 'claude-code/testing'
+import { bar, gradient, modeOnly, modelName, toUsage } from './register'
+
+test('bar fills in half cells', () => {
+  expect(bar(0)).toEqual({ fill: '', track: '──────────' })
+  expect(bar(50)).toEqual({ fill: '━━━━━', track: '─────' })
+  expect(bar(100)).toEqual({ fill: '━━━━━━━━━━', track: '' })
+  expect(bar(35)).toEqual({ fill: '━━━╸', track: '──────' })
+})
+
+test('gradient runs from blue to red and lightens', () => {
+  expect(gradient(0)).toBe('#38bdf8')
+  expect(gradient(1)).toBe('#ef4444')
+  expect(gradient(0, 1)).toBe('#ffffff')
+})
+
+test('model ids read as their names', () => {
+  expect(modelName('claude-opus-5-5')).toBe('Opus 5.5')
+  expect(modelName('claude-sonnet-5-5[1m]')).toBe('Sonnet 5.5 1M')
+  expect(modelName('claude-haiku-4-5-20251001')).toBe('Haiku 4.5')
+  expect(modelName('Opus 5.5')).toBe('Opus 5.5')
+})
+
+test('maps session usage to the bar figures', () => {
+  const u = toUsage({
+    context: { tokens: 45000, window: 200000, percent: 23 },
+    rateLimits: [{ kind: 'five_hour', percentUsed: 12.5, resetsAt: '2026-10-19T18:00:00Z' }],
+    cost: { usd: 1.234 },
+  })
+  expect(u).toEqual({
+    ctx: 23,
+    tokens: 45000,
+    window: 200000,
+    limits: [{ kind: 'five_hour', percent: 12.5, resetsAt: '2026-10-19T18:00:00Z' }],
+    usd: 1.234,
+  })
+})
+
+test('modeOnly drops the shortcut hints', () => {
+  expect(modeOnly('⏵⏵ auto mode on (shift+tab to cycle)')).toBe('⏵⏵ auto')
+  expect(modeOnly('⏵⏵ auto mode on (shift+tab to cycle) · esc to interrupt')).toBe('⏵⏵ auto')
+  expect(modeOnly('⏵⏵ auto mode on')).toBe('⏵⏵ auto')
+  expect(modeOnly('⏸ plan mode on (shift+tab to cycle)')).toBe('⏸ plan')
+  expect(modeOnly('⏵⏵ accept edits on (shift+tab to cycle)')).toBe('⏵⏵ edits')
+  expect(modeOnly('⏵⏵ bypass permissions on (shift+tab to cycle)')).toBe('⏵⏵ bypass')
+})

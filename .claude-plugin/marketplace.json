@@ -1,0 +1,9 @@
+{
+  "name": "donwaztok",
+  "owner": { "name": "Donwaztok" },
+  "metadata": { "description": "Claude Code mods by Donwaztok" },
+  "plugins": [
+    { "name": "git-changes", "source": "./plugins/git-changes", "description": "Source Control pane: git changes of every folder in the project's .code-workspace" },
+    { "name": "usage-line", "source": "./plugins/usage-line", "description": "Animated usage bars (context, rate limits, cost) beside the prompt hint" }
+  ]
+}
