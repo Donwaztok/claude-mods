@@ -180,10 +180,15 @@ const openPane = ($: any) => $.ui.open({ id: PANE, title: TITLE, columns: 48 })
 
 // The engine draws another plugin's Buttons only in the site that drew them, so in the pane
 // they become their text, and the ones ponytail runs as commands become this plugin's own.
-// shortcut: only ponytail's Review and Audit stay pressable; map more keys here when a band adds some.
-const BAND_COMMANDS: Record<string, string> = {
-  review: 'ponytail:ponytail-review',
-  audit: 'ponytail:ponytail-audit',
+// shortcut: only ponytail's Review, Audit and Board stay pressable; map more keys here when a band adds some.
+const BAND_KEYS = ['review', 'audit', 'board']
+
+async function bandAction($: any, key: string) {
+  if (key === 'review') return $.command.run({ command: 'ponytail:ponytail-review', args: '' })
+  if (key === 'audit') return $.command.run({ command: 'ponytail:ponytail-audit', args: '' })
+  // shortcut: opens the board ponytail rewrites after every turn (so up to one turn old), with xdg-open: Linux only.
+  const config = (await $.env.get('XDG_CONFIG_HOME')) ?? `${await $.env.get('HOME')}/.config`
+  return $.process.run(['xdg-open', `${config}/ponytail/band/board.html`])
 }
 
 export function unbutton(node: any, keys: string[]): any {
@@ -191,7 +196,7 @@ export function unbutton(node: any, keys: string[]): any {
   // The engine's own part of the band stays out of the pane.
   if (node.type === 'engine') return null
   if (node.type === 'Button') {
-    if (BAND_COMMANDS[node.props?.key]) keys.push(node.props.key)
+    if (BAND_KEYS.includes(node.props?.key)) keys.push(node.props.key)
     return node.children?.length ? { type: 'Text', children: node.children } : null
   }
   // The band sized itself to its own width; the pane is narrower.
@@ -285,7 +290,7 @@ export const register: Register = on => {
           <Box flexDirection="row" flexWrap="wrap" columnGap={2}>
             {text}
             {keys.map(k => (
-              <Button key={`band:${k}`} plain onPress={() => void $.command.run({ command: BAND_COMMANDS[k]!, args: '' })}>
+              <Button key={`band:${k}`} plain onPress={() => void bandAction($, k)}>
                 {k[0]!.toUpperCase() + k.slice(1)}
               </Button>
             ))}
