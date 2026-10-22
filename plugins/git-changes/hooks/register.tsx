@@ -9,6 +9,12 @@ const repos = atom({ plugin: 'git-changes', key: 'repos' } as const, [])
 const collapsed = atom({ plugin: 'git-changes', key: 'collapsed' } as const, [])
 const diff = atom({ plugin: 'git-changes', key: 'diff' } as const, null)
 
+// While the pane is drawn, the band above the prompt (as the other plugins drew it) shows inside it.
+// Module variables, not $.state: a tree holds the other plugins' press handles, and a reload redraws both sites.
+let isShown = false
+let band: any = null
+let bandKey = ''
+
 // VS Code's gitDecoration colors
 const COLORS: Record<string, string> = {
   M: '#e2c08d',
@@ -170,6 +176,30 @@ async function openDiff($: any, repo: Repo, change: Change, isStaged: boolean) {
   await update($, diff, () => view)
 }
 
+const openPane = ($: any) => $.ui.open({ id: PANE, title: TITLE, columns: 48 })
+
+// The engine draws another plugin's Buttons only in the site that drew them, so in the pane
+// they become their text, and the ones ponytail runs as commands become this plugin's own.
+// shortcut: only ponytail's Review and Audit stay pressable; map more keys here when a band adds some.
+const BAND_COMMANDS: Record<string, string> = {
+  review: 'ponytail:ponytail-review',
+  audit: 'ponytail:ponytail-audit',
+}
+
+export function unbutton(node: any, keys: string[]): any {
+  if (!node || typeof node !== 'object') return node
+  // The engine's own part of the band stays out of the pane.
+  if (node.type === 'engine') return null
+  if (node.type === 'Button') {
+    if (BAND_COMMANDS[node.props?.key]) keys.push(node.props.key)
+    return node.children?.length ? { type: 'Text', children: node.children } : null
+  }
+  // The band sized itself to its own width; the pane is narrower.
+  const { width, ...props } = node.props ?? {}
+  const children = node.children?.map((c: any) => unbutton(c, keys)).filter((c: any) => c !== null)
+  return { ...node, props, ...(children && { children }) }
+}
+
 const toggle = ($: any, key: string) =>
   update($, collapsed, list => (list.includes(key) ? list.filter(k => k !== key) : [...list, key]))
 
@@ -181,13 +211,13 @@ export const register: Register = on => {
     })
     void refresh($)
     $.clock.every(4000, () => void refresh($))
-    void $.ui.open({ id: PANE, title: TITLE, columns: 48 })
+    void openPane($)
     return next(e)
   })
 
   on('command.run', { command: 'git-changes' }, async $ => {
     await refresh($)
-    await $.ui.open({ id: PANE, title: TITLE, columns: 48 })
+    await openPane($)
     return { text: 'Source Control pane opened.' }
   })
 
@@ -198,12 +228,76 @@ export const register: Register = on => {
     return ran
   })
 
+  on('ui.close', async ($, e, next) => {
+    const closed = await next(e)
+    if (e.id === PANE) {
+      isShown = false
+      $.ui.invalidate('ui.render')
+    }
+    return closed
+  })
+
+  // Pane open: the band's rows move into it, so the prompt gets the space. Closed: the band plus a reopen button.
+  on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
+    if (e.props.hasSurvey) return next(e)
+    const below = await next(e).catch(() => undefined)
+    const { Box, Button } = $.ui.resolve(e)
+    if (isShown) {
+      const key = JSON.stringify(below ?? null)
+      if (key !== bandKey) {
+        band = below ?? null
+        bandKey = key
+        $.ui.invalidate('ui.render')
+      }
+      return <Box />
+    }
+    const reopen = (
+      <Box flexDirection="row" justifyContent="flex-end">
+        <Button key="git-changes-open" plain onPress={() => void openPane($)}>
+          ⎇ Source Control
+        </Button>
+      </Box>
+    )
+    return below ? <Box flexDirection="column">{below}{reopen}</Box> : reopen
+  })
+
   on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {
     const { Box, Text, Button, Code } = $.ui.resolve(e)
+    if (!isShown) {
+      // Drawn means placed: now the band can move in here.
+      isShown = true
+      $.ui.invalidate('ui.render')
+    }
+
+    // The band at the pane's bottom edge.
+    const withBand = (body: any) => {
+      if (!band) return body
+      const keys: string[] = []
+      const text = unbutton(band, keys)
+      return (
+        <Box flexDirection="column" minHeight={e.props.scroll.bodyRows}>
+          <Box flexDirection="column" flexGrow={1}>
+            {body}
+          </Box>
+          <Text dimColor wrap="truncate-end">
+            {'─'.repeat(e.props.bodyColumns)}
+          </Text>
+          <Box flexDirection="row" flexWrap="wrap" columnGap={2}>
+            {text}
+            {keys.map(k => (
+              <Button key={`band:${k}`} plain onPress={() => void $.command.run({ command: BAND_COMMANDS[k]!, args: '' })}>
+                {k[0]!.toUpperCase() + k.slice(1)}
+              </Button>
+            ))}
+          </Box>
+        </Box>
+      )
+    }
+
     const view = await read($, diff)
 
     if (view) {
-      return (
+      return withBand(
         <Box flexDirection="column">
           <Box flexDirection="row" gap={1}>
             <Button key="back" hotkey="b" onPress={() => void update($, diff, () => null)}>
@@ -219,7 +313,7 @@ export const register: Register = on => {
           </Text>
           {!view.isFullFile && <Text dimColor>Large file: showing changed hunks only.</Text>}
           <Code source={view.text} path={view.path} format={view.text.startsWith('@@') ? 'diff' : 'source'} wrap="truncate-end" />
-        </Box>
+        </Box>,
       )
     }
 
@@ -270,7 +364,7 @@ export const register: Register = on => {
       )
     }
 
-    return (
+    return withBand(
       <Box flexDirection="column">
         <Box flexDirection="row" justifyContent="space-between">
           <Text bold>SOURCE CONTROL</Text>
@@ -300,7 +394,7 @@ export const register: Register = on => {
             </Box>
           )
         })}
-      </Box>
+      </Box>,
     )
   })
 }

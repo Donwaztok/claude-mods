@@ -1,6 +1,6 @@
 import { expect, test } from 'claude-code/testing'
 
-import { join, parseJsonc, parseStatus } from '../hooks/register'
+import { join, parseJsonc, parseStatus, unbutton } from '../hooks/register'
 
 const PANE = {
   plugin: 'git-changes',
@@ -25,6 +25,32 @@ test('parses the pieces', async () => {
   expect(s.behind).toBe(1)
   expect(s.staged.map(c => c.code + c.path).join(',')).toBe('Ma.ts,Rnew.ts,Mboth.ts')
   expect(s.changes.map(c => c.code + c.path).join(',')).toBe('Mb/c.ts,Un.ts,Mboth.ts,Cx.ts')
+})
+
+test("the band's buttons become text, and ponytail's commands are kept", async () => {
+  const keys: string[] = []
+  const band = {
+    type: 'Box',
+    props: { flexDirection: 'column' },
+    children: [
+      {
+        type: 'Box',
+        props: { flexDirection: 'row', width: 110 },
+        children: [
+          { type: 'Button', props: { key: 'level', plain: true }, children: ['● full'] },
+          { type: 'Text', children: ['$0.42'] },
+          { type: 'Button', props: { key: 'review', label: 'Review', plain: true } },
+          { type: 'Button', props: { key: 'board', label: 'Board', plain: true } },
+        ],
+      },
+      { type: 'engine', props: {} },
+    ],
+  }
+  const out = unbutton(band, keys)
+  expect(keys).toEqual(['review'])
+  expect(out.children.length).toBe(1)
+  expect(out.children[0].props.width).toBe(undefined)
+  expect(out.children[0].children.map((c: any) => `${c.type}:${c.children}`).join(',')).toBe('Text:● full,Text:$0.42')
 })
 
 test('the pane lists the workspace folders and opens a diff', async ($, on) => {
