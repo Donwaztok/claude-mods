@@ -24,6 +24,7 @@ test('parses the pieces', async () => {
   expect(s.ahead).toBe(2)
   expect(s.behind).toBe(1)
   expect(s.staged.map(c => c.code + c.path).join(',')).toBe('Ma.ts,Rnew.ts,Mboth.ts')
+  expect(s.staged[1]?.orig).toBe('old.ts')
   expect(s.changes.map(c => c.code + c.path).join(',')).toBe('Mb/c.ts,Un.ts,Mboth.ts,Cx.ts')
 })
 
@@ -60,8 +61,9 @@ test('the pane lists the workspace folders and opens a diff', async ($, on) => {
   on('session.cwd', () => ({ value: '/w/app' }))
   on('fs.list', () => ({ value: [{ name: 'app.code-workspace', kind: 'file', size: 1, mtimeMs: 0, isLink: false }] }))
   on('fs.read', () => ({ value: '{"folders":[{"path":"."},{"path":"../api",},]}' }))
+  const ran: string[] = []
   on('process.run', (_, e: any) => ({
-    value: e.argv[1] === 'diff'
+    value: (ran.push(e.argv.join(' ')), e.argv[1] === 'diff')
       ? { exitCode: 0, stdout: 'diff --git a/x b/x\nindex 1..2\n--- a/x\n+++ b/x\n@@ -1 +1 @@\n-old\n+hello\n', stderr: '', isStdoutTruncated: false, isStderrTruncated: false }
       : e.init?.cwd === '/w/app'
         ? { exitCode: 0, stdout: '## dev...origin/dev [ahead 1]\0 M src/page.tsx\0', stderr: '', isStdoutTruncated: false, isStderrTruncated: false }
@@ -75,6 +77,16 @@ test('the pane lists the workspace folders and opens a diff', async ($, on) => {
   expect((await ui.find({ type: 'Text', text: /^app$/ }))?.text).toBe('app')
   expect((await ui.find({ type: 'Text', text: /^api$/ }))?.text).toBe('api')
   expect(await ui.find({ type: 'Text', text: /No changes/ })).toBeTruthy()
+  expect(await ui.find({ key: 'push:app' } as any)).toBeTruthy()
+  expect(await ui.find({ key: 'pull:app' } as any)).toBeFalsy()
+  expect(await ui.find({ key: 'push:api' } as any)).toBeFalsy()
+  await ui.press({ key: 'stage:app:src/page.tsx' })
+  expect(ran).toContain('git add -A -- src/page.tsx')
+  await ui.press({ key: 'push:app' })
+  expect(ran).not.toContain('git push')
+  expect(await ui.find({ type: 'Text', text: /Push 1 commit from dev\?/ })).toBeTruthy()
+  await ui.press({ key: 'confirm:app' })
+  expect(ran).toContain('git push')
   await ui.press({ key: 'app:w:src/page.tsx' })
   expect((await ui.find({ type: 'Text', text: /Working Tree/ }))?.text).toBe('(Working Tree)')
   const drawn = JSON.stringify(await ui.drawn())

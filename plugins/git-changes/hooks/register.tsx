@@ -84,13 +84,14 @@ export function parseStatus(out: string) {
     const x = e.charAt(0)
     const y = e.charAt(1)
     const path = e.slice(3)
-    if (x === 'R' || x === 'C') i++ // the original path follows a rename
+    // the original path follows a rename
+    const orig = x === 'R' || x === 'C' ? entries[++i] : undefined
     if (x === '!') continue
     if (x === '?') changes.push({ path, code: 'U' })
     else if (x === 'U' || y === 'U' || (x === y && (x === 'A' || x === 'D')))
       changes.push({ path, code: 'C' })
     else {
-      if (x !== ' ') staged.push({ path, code: x })
+      if (x !== ' ') staged.push(orig ? { path, code: x, orig } : { path, code: x })
       if (y !== ' ') changes.push({ path, code: y })
     }
   }
@@ -198,6 +199,29 @@ export function unbutton(node: any, keys: string[]): any {
   const children = node.children?.map((c: any) => unbutton(c, keys)).filter((c: any) => c !== null)
   return { ...node, props, ...(children && { children }) }
 }
+
+// Runs a git action, toasts its failure, then rescans so the pane follows.
+async function git($: any, repo: Repo, args: string[], doing?: string) {
+  if (doing) $.ui.toast(`${repo.name}: ${doing}…`)
+  const run = await $.process
+    .run(['git', ...args], { cwd: repo.path, env: { GIT_TERMINAL_PROMPT: '0' } })
+    .catch((err: unknown) => ({ exitCode: 1, stdout: '', stderr: String(err) }))
+  if (run.exitCode !== 0) $.ui.toast(`${repo.name}: git ${args[0]} failed: ${(run.stderr || run.stdout).trim().split('\n').pop()}`)
+  else if (doing) $.ui.toast(`${repo.name}: ${args[0]} done`)
+  await refresh($)
+}
+
+// Push/pull waiting for a yes, as VS Code asks before syncing. Module variable: a reload drops the question.
+let pending: { repo: string; op: 'push' | 'pull' } | null = null
+const ask = ($: any, value: typeof pending) => {
+  pending = value
+  $.ui.invalidate('ui.render')
+}
+
+const stage = ($: any, repo: Repo, paths: string[]) => git($, repo, ['add', '-A', '--', ...paths])
+// reset, unlike restore --staged, also works before the first commit
+const unstage = ($: any, repo: Repo, items: Change[]) =>
+  git($, repo, ['reset', '-q', '--', ...items.flatMap(c => (c.orig ? [c.path, c.orig] : [c.path]))])
 
 const toggle = ($: any, key: string) =>
   update($, collapsed, list => (list.includes(key) ? list.filter(k => k !== key) : [...list, key]))
@@ -338,7 +362,15 @@ export const register: Register = on => {
               <Text dimColor>{dir}</Text>
             </Button>
           </Box>
-          <Text color={COLORS[c.code]}> {c.code}</Text>
+          <Box flexDirection="row">
+            <Button
+              plain
+              key={`${isStaged ? 'unstage' : 'stage'}:${repo.name}:${c.path}`}
+              label={isStaged ? '−' : '+'}
+              onPress={() => void (isStaged ? unstage($, repo, [c]) : stage($, repo, [c.path]))}
+            />
+            <Text color={COLORS[c.code]}> {c.code}</Text>
+          </Box>
         </Box>
       )
     }
@@ -356,7 +388,15 @@ export const register: Register = on => {
                 {isOpen ? '▾' : '▸'} {label}
               </Button>
             </Box>
-            <Text dimColor>{items.length}</Text>
+            <Box flexDirection="row" gap={1}>
+              <Button
+                plain
+                key={`${isStaged ? 'unstage' : 'stage'}-all:${repo.name}`}
+                label={isStaged ? '−' : '+'}
+                onPress={() => void (isStaged ? git($, repo, ['reset', '-q']) : git($, repo, ['add', '-A']))}
+              />
+              <Text dimColor>{items.length}</Text>
+            </Box>
           </Box>
           {isOpen && items.map(c => fileRow(repo, c, isStaged))}
         </Box>
@@ -373,20 +413,49 @@ export const register: Register = on => {
         {list.map(repo => {
           const isOpen = !closed.includes(repo.name)
           const count = repo.staged.length + repo.changes.length
-          const sync = [repo.behind ? `↓${repo.behind}` : '', repo.ahead ? `↑${repo.ahead}` : '']
-            .filter(Boolean)
-            .join(' ')
           return (
             <Box key={`repo:${repo.name}`} flexDirection="column">
               <Box flexDirection="row" justifyContent="space-between">
                 <Button plain key={repo.name} onPress={() => void toggle($, repo.name)}>
                   {isOpen ? '▾' : '▸'} <Text bold>{repo.name}</Text>{' '}
                   <Text dimColor>
-                    {repo.isRepo ? ` ${repo.branch}${sync ? ' ' + sync : ''}` : 'not a git repo'}
+                    {repo.isRepo ? ` ${repo.branch}` : 'not a git repo'}
                   </Text>
                 </Button>
-                {count > 0 && <Text color="#3794ff">{count}</Text>}
+                <Box flexDirection="row" gap={1}>
+                  {repo.behind > 0 && (
+                    <Button plain key={`pull:${repo.name}`} label={`↓${repo.behind} Pull`} onPress={() => ask($, { repo: repo.name, op: 'pull' })} />
+                  )}
+                  {repo.ahead > 0 && (
+                    <Button plain key={`push:${repo.name}`} label={`↑${repo.ahead} Push`} onPress={() => ask($, { repo: repo.name, op: 'push' })} />
+                  )}
+                  {count > 0 && <Text color="#3794ff">{count}</Text>}
+                </Box>
               </Box>
+              {pending?.repo === repo.name && (
+                <Box flexDirection="row" gap={1}>
+                  <Text color="#3794ff">
+                    {'  '}
+                    {pending.op === 'push'
+                      ? `Push ${repo.ahead} commit${repo.ahead === 1 ? '' : 's'} from ${repo.branch}?`
+                      : `Pull ${repo.behind} commit${repo.behind === 1 ? '' : 's'} into ${repo.branch}?`}
+                  </Text>
+                  <Button
+                    key={`confirm:${repo.name}`}
+                    hotkey="y"
+                    onPress={() => {
+                      const op = pending!.op
+                      ask($, null)
+                      void git($, repo, [op], op === 'push' ? 'pushing' : 'pulling')
+                    }}
+                  >
+                    Yes
+                  </Button>
+                  <Button key={`cancel:${repo.name}`} hotkey="n" onPress={() => ask($, null)}>
+                    No
+                  </Button>
+                </Box>
+              )}
               {isOpen && repo.isRepo && count === 0 && <Text dimColor>{'    '}No changes</Text>}
               {isOpen && group(repo, 'Staged Changes', repo.staged, true)}
               {isOpen && group(repo, 'Changes', repo.changes, false)}

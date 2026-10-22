@@ -1,4 +1,4 @@
-export type Change = { path: string; code: string }
+export type Change = { path: string; code: string; orig?: string }
 export type Repo = {
   name: string
   path: string
