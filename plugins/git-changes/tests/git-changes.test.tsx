@@ -47,7 +47,7 @@ test("the band's buttons become text, and ponytail's commands are kept", async (
     ],
   }
   const out = unbutton(band, keys)
-  expect(keys).toEqual(['review', 'board'])
+  expect(keys).toEqual(['review'])
   expect(out.children.length).toBe(1)
   expect(out.children[0].props.width).toBe(undefined)
   expect(out.children[0].children.map((c: any) => `${c.type}:${c.children}`).join(',')).toBe('Text:● full,Text:$0.42')

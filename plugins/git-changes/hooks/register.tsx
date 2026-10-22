@@ -180,16 +180,10 @@ const openPane = ($: any) => $.ui.open({ id: PANE, title: TITLE, columns: 48 })
 
 // The engine draws another plugin's Buttons only in the site that drew them, so in the pane
 // they become their text, and the ones ponytail runs as commands become this plugin's own.
-// shortcut: only ponytail's Review, Audit and Board stay pressable; map more keys here when a band adds some.
-const BAND_KEYS = ['review', 'audit', 'board']
+// shortcut: only ponytail's Review and Audit stay pressable; add keys here when a band adds commands.
+const BAND_KEYS = ['review', 'audit']
 
-async function bandAction($: any, key: string) {
-  if (key === 'review') return $.command.run({ command: 'ponytail:ponytail-review', args: '' })
-  if (key === 'audit') return $.command.run({ command: 'ponytail:ponytail-audit', args: '' })
-  // shortcut: opens the board ponytail rewrites after every turn (so up to one turn old), with xdg-open: Linux only.
-  const config = (await $.env.get('XDG_CONFIG_HOME')) ?? `${await $.env.get('HOME')}/.config`
-  return $.process.run(['xdg-open', `${config}/ponytail/band/board.html`])
-}
+const bandAction = ($: any, key: string) => $.command.run({ command: `ponytail:ponytail-${key}`, args: '' })
 
 export function unbutton(node: any, keys: string[]): any {
   if (!node || typeof node !== 'object') return node

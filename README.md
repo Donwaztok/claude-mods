@@ -12,7 +12,7 @@ Painel **Source Control** no estilo do VS Code. Lê os `folders` do `.code-works
 
 - Abre sozinho a partir de 144 colunas, ou com `/git-changes`.
 - Atualiza a cada 4 s e depois de cada ferramenta que o Claude roda.
-- Com o painel aberto, a faixa de plugins acima do prompt (a do ponytail, por exemplo) vai para o rodapé do painel e libera espaço. Os botões de outros plugins viram texto; Review, Audit e Board do ponytail continuam clicáveis; Details não (é um estado interno do ponytail).
+- Com o painel aberto, a faixa de plugins acima do prompt (a do ponytail, por exemplo) vai para o rodapé do painel e libera espaço. Os botões de outros plugins viram texto; Review e Audit do ponytail continuam clicáveis. Board, Details e os níveis ficam na faixa original, que volta ao fechar o painel.
 - Fechado no ✕, a faixa volta com um botão **⎇ Source Control** para reabrir.
 - Para pegar a faixa de outro plugin, o git-changes precisa vir antes dele em `enabledPlugins` no `~/.claude/settings.json` (os plugins são chamados nessa ordem):
   ```json
