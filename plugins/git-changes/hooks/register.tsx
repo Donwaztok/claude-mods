@@ -211,8 +211,8 @@ async function git($: any, repo: Repo, args: string[], doing?: string) {
   await refresh($)
 }
 
-// Push/pull waiting for a yes, as VS Code asks before syncing. Module variable: a reload drops the question.
-let pending: { repo: string; op: 'push' | 'pull' } | null = null
+// Push/pull/discard waiting for a yes, as VS Code asks first. Module variable: a reload drops the question.
+let pending: { repo: string; op: 'push' | 'pull' } | { repo: string; op: 'discard'; change: Change } | null = null
 const ask = ($: any, value: typeof pending) => {
   pending = value
   $.ui.invalidate('ui.render')
@@ -222,6 +222,35 @@ const stage = ($: any, repo: Repo, paths: string[]) => git($, repo, ['add', '-A'
 // reset, unlike restore --staged, also works before the first commit
 const unstage = ($: any, repo: Repo, items: Change[]) =>
   git($, repo, ['reset', '-q', '--', ...items.flatMap(c => (c.orig ? [c.path, c.orig] : [c.path]))])
+// The working tree back to the index; an untracked file is deleted, as VS Code's Discard Changes.
+const discard = ($: any, repo: Repo, c: Change) =>
+  git($, repo, c.code === 'U' ? ['clean', '-fq', '--', c.path] : ['checkout', '-q', '--', c.path])
+
+// The file row whose ⋯ menu is open. Module variable, as pending.
+let menu: string | null = null
+const setMenu = ($: any, key: string | null) => {
+  menu = key
+  $.ui.invalidate('ui.render')
+}
+
+// The freedesktop file manager selects the file (Dolphin, Nautilus...); else xdg-open shows its folder; else macOS's open -R.
+async function reveal($: any, repo: Repo, c: Change) {
+  const file = join(repo.path, c.path)
+  const dir = file.slice(0, file.lastIndexOf('/')) || '/'
+  const shown = c.code === 'D' ? dir : file
+  // encoded per segment: dbus-send splits an array on commas
+  const uri = 'file://' + shown.split('/').map(encodeURIComponent).join('/')
+  for (const argv of [
+    ['dbus-send', '--session', '--print-reply', '--dest=org.freedesktop.FileManager1', '/org/freedesktop/FileManager1',
+      'org.freedesktop.FileManager1.ShowItems', `array:string:${uri}`, 'string:'],
+    ['xdg-open', dir],
+    ['open', '-R', shown],
+  ]) {
+    const run = await $.process.run(argv, { cwd: repo.path }).catch(() => null)
+    if (run?.exitCode === 0) return
+  }
+  $.ui.toast(`${repo.name}: no file manager found to show ${c.path}`)
+}
 
 const toggle = ($: any, key: string) =>
   update($, collapsed, list => (list.includes(key) ? list.filter(k => k !== key) : [...list, key]))
@@ -347,30 +376,62 @@ export const register: Register = on => {
     const fileRow = (repo: Repo, c: Change, isStaged: boolean) => {
       const dir = c.path.includes('/') ? c.path.slice(0, c.path.lastIndexOf('/')) : ''
       const isDeleted = c.code === 'D'
+      const rowKey = `${repo.name}:${isStaged ? 's' : 'w'}:${c.path}`
       return (
-        <Box key={`row:${repo.name}:${isStaged ? 's' : 'w'}:${c.path}`} flexDirection="row" justifyContent="space-between">
-          <Box flexDirection="row" flexShrink={1}>
-            <Text>{'    '}</Text>
-            <Button
-              plain
-              key={`${repo.name}:${isStaged ? 's' : 'w'}:${c.path}`}
-              onPress={() => void openDiff($, repo, c, isStaged)}
-            >
-              <Text color={COLORS[c.code]} strikethrough={isDeleted}>
-                {basename(c.path)}
-              </Text>{' '}
-              <Text dimColor>{dir}</Text>
-            </Button>
+        <Box key={`row:${rowKey}`} flexDirection="column">
+          <Box flexDirection="row" justifyContent="space-between">
+            <Box flexDirection="row" flexShrink={1}>
+              <Text>{'    '}</Text>
+              <Button
+                plain
+                key={rowKey}
+                onPress={() => void openDiff($, repo, c, isStaged)}
+              >
+                <Text color={COLORS[c.code]} strikethrough={isDeleted}>
+                  {basename(c.path)}
+                </Text>{' '}
+                <Text dimColor>{dir}</Text>
+              </Button>
+            </Box>
+            <Box flexDirection="row" gap={1}>
+              <Button plain key={`menu:${rowKey}`} label="⋯" onPress={() => setMenu($, menu === rowKey ? null : rowKey)} />
+              {!isStaged && (
+                <Button
+                  plain
+                  key={`discard:${repo.name}:${c.path}`}
+                  label="↶"
+                  onPress={() => ask($, { repo: repo.name, op: 'discard', change: c })}
+                />
+              )}
+              <Button
+                plain
+                key={`${isStaged ? 'unstage' : 'stage'}:${repo.name}:${c.path}`}
+                label={isStaged ? '−' : '+'}
+                onPress={() => void (isStaged ? unstage($, repo, [c]) : stage($, repo, [c.path]))}
+              />
+              <Text color={COLORS[c.code]}>{c.code}</Text>
+            </Box>
           </Box>
-          <Box flexDirection="row">
-            <Button
-              plain
-              key={`${isStaged ? 'unstage' : 'stage'}:${repo.name}:${c.path}`}
-              label={isStaged ? '−' : '+'}
-              onPress={() => void (isStaged ? unstage($, repo, [c]) : stage($, repo, [c.path]))}
-            />
-            <Text color={COLORS[c.code]}> {c.code}</Text>
-          </Box>
+          {menu === rowKey && (
+            <Box flexDirection="column">
+              <Box flexDirection="row">
+                <Text>{'      '}</Text>
+                <Button
+                  plain
+                  key={`reveal:${rowKey}`}
+                  label="› Reveal in File Explorer"
+                  onPress={() => {
+                    setMenu($, null)
+                    void reveal($, repo, c)
+                  }}
+                />
+              </Box>
+              <Box flexDirection="row">
+                <Text>{'      '}</Text>
+                <Button plain key={`menu-close:${rowKey}`} label="› Close" onPress={() => setMenu($, null)} />
+              </Box>
+            </Box>
+          )}
         </Box>
       )
     }
@@ -436,17 +497,22 @@ export const register: Register = on => {
                 <Box flexDirection="row" gap={1}>
                   <Text color="#3794ff">
                     {'  '}
-                    {pending.op === 'push'
-                      ? `Push ${repo.ahead} commit${repo.ahead === 1 ? '' : 's'} from ${repo.branch}?`
-                      : `Pull ${repo.behind} commit${repo.behind === 1 ? '' : 's'} into ${repo.branch}?`}
+                    {pending.op === 'discard'
+                      ? pending.change.code === 'U'
+                        ? `Delete untracked ${basename(pending.change.path)}?`
+                        : `Discard changes in ${basename(pending.change.path)}?`
+                      : pending.op === 'push'
+                        ? `Push ${repo.ahead} commit${repo.ahead === 1 ? '' : 's'} from ${repo.branch}?`
+                        : `Pull ${repo.behind} commit${repo.behind === 1 ? '' : 's'} into ${repo.branch}?`}
                   </Text>
                   <Button
                     key={`confirm:${repo.name}`}
                     hotkey="y"
                     onPress={() => {
-                      const op = pending!.op
+                      const p = pending!
                       ask($, null)
-                      void git($, repo, [op], op === 'push' ? 'pushing' : 'pulling')
+                      if (p.op === 'discard') void discard($, repo, p.change)
+                      else void git($, repo, [p.op], p.op === 'push' ? 'pushing' : 'pulling')
                     }}
                   >
                     Yes

@@ -10,6 +10,7 @@ Painel **Source Control** no estilo do VS Code. Lê os `folders` do `.code-works
 
 ![Diff de um arquivo](docs/git-changes-diff.png)
 
+- Em cada arquivo: **+**/**−** faz stage/unstage, **↶** descarta as mudanças (arquivo novo é apagado), sempre pedindo confirmação, e **⋯** abre um menu com **Reveal in File Explorer**.
 - Abre sozinho a partir de 144 colunas, ou com `/git-changes`.
 - Atualiza a cada 4 s e depois de cada ferramenta que o Claude roda.
 - Com o painel aberto, a faixa de plugins acima do prompt (a do ponytail, por exemplo) vai para o rodapé do painel e libera espaço. Os botões de outros plugins viram texto; Review e Audit do ponytail continuam clicáveis. Board, Details e os níveis ficam na faixa original, que volta ao fechar o painel.
