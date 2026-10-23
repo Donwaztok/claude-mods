@@ -127,6 +127,15 @@ export const register: Register = on => {
     return r
   })
 
+  // A resumed or cleared session starts with empty state and no measure until a limit moves,
+  // and drawing may not write state: load it here.
+  on('classic.SessionStart', async ($, e, next) => {
+    const r = await next(e)
+    await refreshModel($)
+    await measure($, toUsage(await $.session.usage()))
+    return r
+  })
+
   on('session.measure', async ($, e, next) => {
     await refreshModel($)
     await measure($, toUsage(e))
@@ -150,14 +159,8 @@ export const register: Register = on => {
   })
 
   on('ui.render', { component: 'PromptHint' }, async ($, e, next) => {
-    let u = await read($, usage)
-    // A resumed session starts with empty state and no measure until a limit moves.
-    if (!u) {
-      await refreshModel($)
-      await measure($, toUsage(await $.session.usage()))
-      u = await read($, usage)
-      if (!u) return next(e)
-    }
+    const u = await read($, usage)
+    if (!u) return next(e)
 
     const { Box, Text } = $.ui.resolve(e)
     const f = await read($, frame)

@@ -1,1 +1,1 @@
-{ "name": "usage-line", "author": { "name": "Donwaztok" }, "version": "0.2.1", "description": "Animated usage bars (context, rate limits, cost) beside the prompt hint", "types": "./types/index.d.ts" }
+{ "name": "usage-line", "author": { "name": "Donwaztok" }, "version": "0.2.2", "description": "Animated usage bars (context, rate limits, cost) beside the prompt hint", "types": "./types/index.d.ts" }

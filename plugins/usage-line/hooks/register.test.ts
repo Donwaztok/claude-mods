@@ -54,3 +54,29 @@ test('timeLeft counts down to the reset', () => {
   expect(timeLeft('2026-10-22T10:00:00Z', now)).toBe('0m')
   expect(timeLeft(undefined, now)).toBe('')
 })
+
+const HINT = {
+  plugin: 'usage-line',
+  component: 'PromptHint',
+  surface: 'terminal',
+  props: { isDraft: false, isWorking: false, hint: '? for shortcuts' },
+} as const
+
+test('a resumed session gets its bars back, drawing without writing state', async ($, on) => {
+  on('session.usage', () => ({
+    value: { context: { tokens: 1, window: 100, percent: 43 }, rateLimits: [], cost: { usd: 0 } } as any,
+  }))
+  on('session.model', () => ({ value: 'claude-opus-5-5' }))
+  on('clock.every', () => ({ deny: 'no timer in tests' }))
+  on('classic.SessionStart', () => ({}) as any)
+  // the engine's own line, beneath the plugin
+  on('ui.render', () => ({ type: 'Text', props: {}, children: ['? for shortcuts'] }) as any)
+  // the state of a resumed session: empty, and no session.start
+  const empty = await $.ui.mount(HINT as any)
+  expect(JSON.stringify(await empty.drawn())).not.toContain('Opus 5.5')
+  await empty.unmount()
+  await $.classic.SessionStart({ source: 'resume' } as any)
+  const ui = await $.ui.mount(HINT as any)
+  expect(JSON.stringify(await ui.drawn())).toContain('Opus 5.5')
+  await ui.unmount()
+})
