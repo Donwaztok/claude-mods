@@ -466,17 +466,21 @@ async function start($: any, l: Launch, all: Launch[]) {
   runs.set(l.key, run)
   $.ui.invalidate('ui.render')
   try {
-    for await (const { text } of run.stream) {
-      run.out = (run.out + text.replace(ANSI, '')).slice(-MAX_OUTPUT)
+    // read by hand: the loop's return value is { code, signal }, which stream.result can miss
+    let step
+    while (!(step = await run.stream.next()).done) {
+      run.out = (run.out + step.value.text.replace(ANSI, '')).slice(-MAX_OUTPUT)
       if (output === l.key) $.ui.invalidate('ui.render')
     }
-    Object.assign(run, await run.stream.result)
+    Object.assign(run, step.value)
   } catch (err) {
     // stopped (the stream closed early) or never started
     run.out += `\n${err}\n`
     run.code ??= null
     run.signal ??= 'stopped'
   }
+  // always ended, so ▶ can start it again
+  run.code ??= null
   run.out += `\n[exited${run.signal ? ` by ${run.signal}` : ` with ${run.code}`}]\n`
   if (run.code) $.ui.toast(`${l.name}: exited with ${run.code}`)
   $.ui.invalidate('ui.render')
@@ -574,7 +578,7 @@ export const register: Register = on => {
 
     // Run and Debug as VS Code's: one line, ▶ / ■ for the picked entry, its name opening the list above it.
     const runSection = () => {
-      if (!picked) return <Text dimColor>Nothing to run (launch.json, tasks.json, package.json).</Text>
+      if (!picked) return <Text dimColor>Nothing to run</Text>
       const isLive = isRunning(picked.key)
       const isRunnable = !!(picked.argv || picked.parts)
       // the others running, out of sight while the list is closed
