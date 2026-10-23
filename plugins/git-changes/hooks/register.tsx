@@ -28,6 +28,40 @@ const COLORS: Record<string, string> = {
   T: '#e2c08d',
 }
 
+// A file row's text past its width is cut, its last letters fading out.
+// shortcut: fades toward a dark background, as the engine does not say the theme; a light theme gets a dark tail.
+const BG = [0x1e, 0x1e, 0x1e]
+const TEXT = '#cccccc'
+// the dimmed path's color, where its fade starts
+const DIM = '#8c8c8c'
+const FADE = 4
+
+export type Span = { text: string; color: string; dim?: boolean; strike?: boolean }
+
+const mix = (hex: string, k: number) =>
+  '#' +
+  [1, 3, 5]
+    .map((at, j) => Math.round(parseInt(hex.slice(at, at + 2), 16) * (1 - k) + BG[j]! * k))
+    .map(n => n.toString(16).padStart(2, '0'))
+    .join('')
+
+export function fadeOut(spans: Span[], width: number): Span[] {
+  const total = spans.reduce((n, s) => n + [...s.text].length, 0)
+  if (total <= width) return spans
+  const steps = Math.min(FADE, Math.max(0, width))
+  let left = width - steps
+  const head: Span[] = []
+  const tail: Span[] = []
+  for (const s of spans) {
+    const chars = [...s.text]
+    const kept = chars.slice(0, Math.max(0, left))
+    if (kept.length) head.push({ ...s, text: kept.join('') })
+    left -= kept.length
+    for (const ch of chars.slice(kept.length)) if (tail.length < steps) tail.push({ ...s, text: ch })
+  }
+  return [...head, ...tail.map((s, i) => ({ ...s, dim: false, color: mix(s.color, (i + 1) / (steps + 1)) }))]
+}
+
 // .code-workspace is JSONC: drop comments and trailing commas outside strings.
 export function parseJsonc(text: string): any {
   let out = ''
@@ -676,6 +710,15 @@ export const register: Register = on => {
       const dir = c.path.includes('/') ? c.path.slice(0, c.path.lastIndexOf('/')) : ''
       const isDeleted = c.code === 'D'
       const rowKey = `${repo.name}:${isStaged ? 's' : 'w'}:${c.path}`
+      // one line: the indent, the name, a space, then ⋯ ↶ + M (staged: ⋯ − M)
+      const width = e.props.bodyColumns - 4 - 1 - (isStaged ? 5 : 7)
+      const label = fadeOut(
+        [
+          { text: basename(c.path), color: COLORS[c.code] ?? TEXT, strike: isDeleted },
+          ...(dir ? [{ text: ` ${dir}`, color: DIM, dim: true }] : []),
+        ],
+        width,
+      )
       return (
         <Box key={`row:${rowKey}`} flexDirection="column">
           <Box flexDirection="row" justifyContent="space-between">
@@ -686,13 +729,16 @@ export const register: Register = on => {
                 key={rowKey}
                 onPress={() => void openDiff($, repo, c, isStaged)}
               >
-                <Text color={COLORS[c.code]} strikethrough={isDeleted}>
-                  {basename(c.path)}
-                </Text>{' '}
-                <Text dimColor>{dir}</Text>
+                <Text wrap="truncate-end">
+                  {label.map(l => (
+                    <Text color={l.dim ? undefined : l.color} dimColor={l.dim} strikethrough={l.strike}>
+                      {l.text}
+                    </Text>
+                  ))}
+                </Text>
               </Button>
             </Box>
-            <Box flexDirection="row" gap={1}>
+            <Box flexDirection="row" gap={1} flexShrink={0}>
               <Button plain key={`menu:${rowKey}`} label="⋯" onPress={() => setMenu($, menu === rowKey ? null : rowKey)} />
               {!isStaged && (
                 <Button

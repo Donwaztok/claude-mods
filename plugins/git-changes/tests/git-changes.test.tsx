@@ -1,6 +1,6 @@
 import { expect, test } from 'claude-code/testing'
 
-import { join, parseJsonc, parseStatus, toLaunches, toScripts, toTasks, unbutton } from '../hooks/register'
+import { fadeOut, join, parseJsonc, parseStatus, toLaunches, toScripts, toTasks, unbutton } from '../hooks/register'
 
 const PANE = {
   plugin: 'git-changes',
@@ -26,6 +26,23 @@ test('parses the pieces', async () => {
   expect(s.staged.map(c => c.code + c.path).join(',')).toBe('Ma.ts,Rnew.ts,Mboth.ts')
   expect(s.staged[1]?.orig).toBe('old.ts')
   expect(s.changes.map(c => c.code + c.path).join(',')).toBe('Mb/c.ts,Un.ts,Mboth.ts,Cx.ts')
+})
+
+test('a long file row is cut to its width, its last letters fading', async () => {
+  const spans = [
+    { text: 'page.tsx', color: '#e2c08d' },
+    { text: ' app/components', color: '#8c8c8c', dim: true },
+  ]
+  expect(fadeOut(spans, 40)).toBe(spans)
+  const cut = fadeOut(spans, 12)
+  expect(cut.map(s => s.text).join('')).toBe('page.tsx app')
+  // the name whole, then the path's first four letters fading from its gray to the background
+  expect(cut[0]).toEqual(spans[0])
+  expect(cut.slice(1).map(s => s.color)).toEqual(['#767676', '#606060', '#4a4a4a', '#343434'])
+  expect(cut.slice(1).every(s => !s.dim)).toBe(true)
+  // cut inside the name: its own color fades
+  expect(fadeOut(spans, 6).map(s => s.text).join('')).toBe('page.t')
+  expect(fadeOut(spans, 6)[1]!.color).toBe('#bba077')
 })
 
 test('launch configurations become commands', async () => {
