@@ -1,13 +1,15 @@
 import { atom, read, update } from 'claude-code'
 import type { Register } from 'claude-code'
 
-import type { Change, DiffView, Repo } from '../types'
+import type { Change, DiffView, Launch, Repo } from '../types'
 
 const PANE = 'git-changes'
 const TITLE = 'Source Control'
 const repos = atom({ plugin: 'git-changes', key: 'repos' } as const, [])
 const collapsed = atom({ plugin: 'git-changes', key: 'collapsed' } as const, [])
 const diff = atom({ plugin: 'git-changes', key: 'diff' } as const, null)
+const launches = atom({ plugin: 'git-changes', key: 'launches' } as const, [])
+const selected = atom({ plugin: 'git-changes', key: 'selected' } as const, null)
 
 // While the pane is drawn, the band above the prompt (as the other plugins drew it) shows inside it.
 // Module variables, not $.state: a tree holds the other plugins' press handles, and a reload redraws both sites.
@@ -98,7 +100,10 @@ export function parseStatus(out: string) {
   return { branch, ahead, behind, staged, changes }
 }
 
-async function findFolders($: any): Promise<{ name: string; path: string }[]> {
+type Folder = { name: string; path: string }
+
+// The folders, and the workspace file itself when there is one (its `launch` and `tasks` blocks).
+async function findFolders($: any): Promise<{ folders: Folder[]; ws?: { name: string; json: any } }> {
   const cwd: string = await $.session.cwd()
   const entries = await $.fs.list(cwd)
   const ws = entries
@@ -106,11 +111,16 @@ async function findFolders($: any): Promise<{ name: string; path: string }[]> {
     .sort((a: any, b: any) => a.name.localeCompare(b.name))[0]
   if (ws) {
     const json = parseJsonc(await $.fs.read(`${cwd}/${ws.name}`))
-    return (json.folders ?? []).map((f: any) => {
+    const folders = (json.folders ?? []).map((f: any) => {
       const path = join(cwd, f.path ?? '.')
       return { name: f.name ?? basename(path), path }
     })
+    return { folders, ws: { name: ws.name.replace(/\.code-workspace$/, ''), json } }
   }
+  return { folders: await findRepos($, cwd, entries) }
+}
+
+async function findRepos($: any, cwd: string, entries: any[]): Promise<Folder[]> {
   if (entries.some((f: any) => f.name === '.git')) return [{ name: basename(cwd), path: cwd }]
   // No workspace file and not a repo: every child repo, like opening the parent folder.
   const kids = entries.filter((f: any) => f.kind === 'directory')
@@ -127,9 +137,128 @@ const refresh = ($: any) =>
     .catch(err => $.ui.log(`git-changes: ${err}`))
     .finally(() => (inFlight = null)))
 
+// ${workspaceFolder} is the file's folder (a workspace file's: its first folder); ${env:X} waits for the run.
+const vars = (base: string, folders: Folder[]) => (s: unknown) =>
+  String(s)
+    .replace(/\$\{workspaceFolder(?::([^}]+))?\}/g, (m, n) => (n ? folders.find(f => f.name === n)?.path ?? m : base))
+    .replace(/\$\{workspaceFolderBasename\}/g, basename(base))
+
+// a null env value unsets the variable in VS Code; here it is just left out
+const envOf = (env: any, sub: (s: unknown) => string) =>
+  Object.fromEntries(Object.entries(env ?? {}).filter(([, v]) => v != null).map(([k, v]) => [k, sub(v)]))
+
+// launch.json: Run and Debug's configurations and compounds.
+export function toLaunches(launch: any, source: string, base: string, folders: Folder[]): Launch[] {
+  const sub = vars(base, folders)
+  const configs: Launch[] = (launch?.configurations ?? []).map((c: any) => {
+    const key = `${source}:${c.name}`
+    const args = [c.runtimeArgs ?? [], c.program ?? [], c.args ?? []].flat().map(sub)
+    const argv =
+      c.type === 'node-terminal' && c.command
+        ? ['sh', '-c', sub(c.command)]
+        : /^(pwa-)?node$/.test(c.type) && c.request === 'launch' && (c.runtimeExecutable || c.program)
+          ? [sub(c.runtimeExecutable ?? 'node'), ...args]
+          : undefined
+    if (!argv) return { key, name: c.name, source, kind: 'launch', type: c.type }
+    return { key, name: c.name, source, kind: 'launch', argv, cwd: sub(c.cwd ?? base), env: envOf(c.env, sub) }
+  })
+  const compounds: Launch[] = (launch?.compounds ?? []).map((c: any) => ({
+    key: `${source}:${c.name}`,
+    name: c.name,
+    source,
+    kind: 'launch',
+    parts: (c.configurations ?? []).map((p: any) => (typeof p === 'string' ? `${source}:${p}` : `${p.folder}:${p.name}`)),
+  }))
+  return [...configs, ...compounds]
+}
+
+// A shell task's args are quoted as VS Code does for an arg holding spaces.
+const quote = (a: string) => (/\s/.test(a) ? `'${a.replaceAll("'", `'\\''`)}'` : a)
+
+// tasks.json: shell, process and npm tasks; dependsOn starts the named tasks beside it.
+// shortcut: no per-OS blocks, problem matchers or dependsOrder "sequence"; add them when a task needs them.
+export function toTasks(tasks: any, source: string, base: string, folders: Folder[], pm = 'npm'): Launch[] {
+  const sub = vars(base, folders)
+  return (tasks?.tasks ?? []).map((t: any) => {
+    const name: string = t.label ?? (t.script ? `npm: ${t.script}` : String(t.command))
+    const key = `${source}:task:${name}`
+    const parts = [t.dependsOn ?? []].flat().map((d: any) => `${source}:task:${typeof d === 'string' ? d : d.label}`)
+    const args = (t.args ?? []).map((a: any) => sub(typeof a === 'string' ? a : a.value))
+    const argv =
+      t.type === 'npm' && t.script
+        ? [pm, 'run', t.script]
+        : t.command && t.type === 'process'
+          ? [sub(t.command), ...args]
+          : t.command
+            ? ['sh', '-c', [sub(t.command), ...args.map(quote)].join(' ')]
+            : undefined
+    const cwd = sub(t.options?.cwd ?? (t.type === 'npm' && t.path ? `${base}/${t.path}` : base))
+    return {
+      key,
+      name,
+      source,
+      kind: 'task',
+      ...(argv ? { argv, cwd, env: envOf(t.options?.env, sub) } : !parts.length && { type: t.type }),
+      ...(parts.length && { parts }),
+    }
+  })
+}
+
+// package.json scripts, run by the package manager its lock file names, as VS Code's NPM Scripts view.
+export function toScripts(pkg: any, source: string, base: string, pm: string): Launch[] {
+  return Object.keys(pkg?.scripts ?? {}).map(name => ({
+    key: `${source}:npm:${name}`,
+    name,
+    source,
+    kind: 'npm',
+    argv: [pm, 'run', name],
+    cwd: base,
+  }))
+}
+
+const packageManager = (names: Set<string>) =>
+  names.has('pnpm-lock.yaml') ? 'pnpm' : names.has('yarn.lock') ? 'yarn' : names.has('bun.lock') || names.has('bun.lockb') ? 'bun' : 'npm'
+
+async function findLaunches($: any, found: Folder[], ws?: { name: string; json: any }): Promise<Launch[]> {
+  const cwd: string = await $.session.cwd()
+  // A folder that is not a repo still runs, as VS Code opens any folder.
+  const folders = found.length ? found : [{ name: basename(cwd), path: cwd }]
+  const names = async (dir: string) => new Set<string>((await $.fs.list(dir).catch(() => [])).map((f: any) => f.name))
+  // A broken file hides its own entries, not the pane.
+  const json = async (file: string) => {
+    try {
+      return parseJsonc(await $.fs.read(file))
+    } catch (err) {
+      $.ui.log(`git-changes: ${file}: ${err}`, { to: 'debug' })
+    }
+  }
+  const own = await Promise.all(
+    folders.map(async f => {
+      const here = await names(f.path)
+      const vscode = here.has('.vscode') ? await names(`${f.path}/.vscode`) : new Set()
+      const pm = packageManager(here)
+      return {
+        launches: vscode.has('launch.json') ? toLaunches(await json(`${f.path}/.vscode/launch.json`), f.name, f.path, folders) : [],
+        tasks: vscode.has('tasks.json') ? toTasks(await json(`${f.path}/.vscode/tasks.json`), f.name, f.path, folders, pm) : [],
+        scripts: here.has('package.json') ? toScripts(await json(`${f.path}/package.json`), f.name, f.path, pm) : [],
+      }
+    }),
+  )
+  const first = folders[0]!.path
+  return [
+    ...(ws ? toLaunches(ws.json.launch, ws.name, first, folders) : []),
+    ...own.flatMap(o => o.launches),
+    ...(ws ? toTasks(ws.json.tasks, ws.name, first, folders) : []),
+    ...own.flatMap(o => o.tasks),
+    ...own.flatMap(o => o.scripts),
+  ]
+}
+
 async function scan($: any) {
   {
-    const folders = await findFolders($)
+    const { folders, ws } = await findFolders($)
+    const nextLaunches = await findLaunches($, folders, ws)
+    if (JSON.stringify(await read($, launches)) !== JSON.stringify(nextLaunches)) await update($, launches, () => nextLaunches)
     const next: Repo[] = await Promise.all(
       folders.map(async f => {
         const run = await $.process
@@ -252,6 +381,76 @@ async function reveal($: any, repo: Repo, c: Change) {
   $.ui.toast(`${repo.name}: no file manager found to show ${c.path}`)
 }
 
+// The children Run and Debug started, by launch key. Module variables: a reload ends them, as the engine kills a module's children.
+type Run = { stream: any; out: string; code?: number | null; signal?: string | null }
+const runs = new Map<string, Run>()
+// The launch whose output the pane shows.
+let output: string | null = null
+const showOutput = ($: any, key: string | null) => {
+  output = key
+  $.ui.invalidate('ui.render')
+}
+
+// Run and Debug's list, open above its line. Module variable, as menu.
+let isPicking = false
+const setPicking = ($: any, value: boolean) => {
+  isPicking = value
+  $.ui.invalidate('ui.render')
+}
+
+const ANSI = /\x1b\[[0-?]*[ -/]*[@-~]|\x1b\][^\x07\x1b]*(\x07|\x1b\\)/g
+const MAX_OUTPUT = 50000
+const isRunning = (key: string) => runs.has(key) && !('code' in runs.get(key)!)
+
+// ${env:X} from the host environment, which $.env reads only by literal name.
+async function hostEnv($: any, texts: string[]) {
+  const names = [...new Set(texts.flatMap(t => [...t.matchAll(/\$\{env:([^}]+)\}/g)].map(m => m[1]!)))]
+  const values = await Promise.all(
+    names.map(n => $.process.run(['printenv', n]).then((r: any) => r.stdout.replace(/\n$/, ''), () => '')),
+  )
+  return (t: string) => t.replace(/\$\{env:([^}]+)\}/g, (_, n) => values[names.indexOf(n)] ?? '')
+}
+
+async function start($: any, l: Launch, all: Launch[]) {
+  // a compound, or a task's dependsOn
+  for (const k of l.parts ?? []) {
+    const part = all.find(x => x.key === k)
+    if (part?.argv || part?.parts) void start($, part, all)
+    else $.ui.toast(`${l.name}: nothing runnable named ${k.slice(k.indexOf(':') + 1)}`)
+  }
+  if (!l.argv || isRunning(l.key)) return
+  const env = l.env ?? {}
+  const sub = await hostEnv($, [...l.argv, l.cwd ?? '', ...Object.values(env)])
+  const run: Run = {
+    stream: $.process.spawn({
+      argv: l.argv.map(sub),
+      cwd: l.cwd && sub(l.cwd),
+      env: Object.fromEntries(Object.entries(env).map(([k, v]) => [k, sub(v)])),
+    }),
+    out: `$ ${l.argv.join(' ')}\n`,
+  }
+  runs.set(l.key, run)
+  $.ui.invalidate('ui.render')
+  try {
+    for await (const { text } of run.stream) {
+      run.out = (run.out + text.replace(ANSI, '')).slice(-MAX_OUTPUT)
+      if (output === l.key) $.ui.invalidate('ui.render')
+    }
+    Object.assign(run, await run.stream.result)
+  } catch (err) {
+    // stopped (the stream closed early) or never started
+    run.out += `\n${err}\n`
+    run.code ??= null
+    run.signal ??= 'stopped'
+  }
+  run.out += `\n[exited${run.signal ? ` by ${run.signal}` : ` with ${run.code}`}]\n`
+  if (run.code) $.ui.toast(`${l.name}: exited with ${run.code}`)
+  $.ui.invalidate('ui.render')
+}
+
+// Closing the stream kills the child.
+const stop = (key: string) => void runs.get(key)?.stream.return(undefined)
+
 const toggle = ($: any, key: string) =>
   update($, collapsed, list => (list.includes(key) ? list.filter(k => k !== key) : [...list, key]))
 
@@ -321,28 +520,129 @@ export const register: Register = on => {
       $.ui.invalidate('ui.render')
     }
 
-    // The band at the pane's bottom edge.
+    const rule = (
+      <Text dimColor wrap="truncate-end">
+        {'─'.repeat(e.props.bodyColumns)}
+      </Text>
+    )
+    const configs = await read($, launches)
+    const closed = await read($, collapsed)
+    const pick = await read($, selected)
+    const picked = configs.find(l => l.key === pick) ?? configs.find(l => l.argv || l.parts) ?? configs[0]
+
+    const tagOf = (l: Launch) =>
+      !(l.argv || l.parts) ? `${l.type ?? '?'} (unsupported)` : l.kind === 'launch' ? l.source : `${l.kind} · ${l.source}`
+    const statusOf = (key: string) => {
+      const run = runs.get(key)
+      if (isRunning(key)) return <Text color="#89d185">●</Text>
+      return run && run.code !== 0 ? <Text color="#f14c4c">{run.signal ?? run.code}</Text> : null
+    }
+
+    // Run and Debug as VS Code's: one line, ▶ / ■ for the picked entry, its name opening the list above it.
+    const runSection = () => {
+      if (!picked) return <Text dimColor>Nothing to run (launch.json, tasks.json, package.json).</Text>
+      const isLive = isRunning(picked.key)
+      const isRunnable = !!(picked.argv || picked.parts)
+      // the others running, out of sight while the list is closed
+      const others = [...runs.keys()].filter(k => isRunning(k) && k !== picked.key).length
+      return (
+        <Box flexDirection="column">
+          {isPicking &&
+            configs.map(l => (
+              <Box key={`pick-row:${l.key}`} flexDirection="row" justifyContent="space-between">
+                <Button
+                  plain
+                  key={`pick:${l.key}`}
+                  onPress={() => {
+                    setPicking($, false)
+                    void update($, selected, () => l.key)
+                  }}
+                >
+                  <Text bold={l.key === picked.key} dimColor={!(l.argv || l.parts)} wrap="truncate-end">
+                    {l.key === picked.key ? '› ' : '  '}
+                    {l.name}
+                  </Text>
+                </Button>
+                <Box flexDirection="row" gap={1} flexShrink={0}>
+                  {statusOf(l.key)}
+                  <Text dimColor>{tagOf(l)}</Text>
+                </Box>
+              </Box>
+            ))}
+          <Box flexDirection="row" justifyContent="space-between">
+            <Box flexDirection="row" gap={1} flexShrink={1}>
+              {isRunnable ? (
+                <Button
+                  plain
+                  key={`${isLive ? 'stop' : 'run'}:${picked.key}`}
+                  label={isLive ? '■' : '▶'}
+                  onPress={() => (isLive ? stop(picked.key) : void start($, picked, configs))}
+                />
+              ) : (
+                <Text dimColor>·</Text>
+              )}
+              <Button plain key="run-pick" onPress={() => setPicking($, !isPicking)}>
+                <Text bold wrap="truncate-end">
+                  {picked.name}
+                </Text>{' '}
+                {isPicking ? '▴' : '▾'}
+              </Button>
+            </Box>
+            <Box flexDirection="row" gap={1} flexShrink={0}>
+              {statusOf(picked.key)}
+              {runs.has(picked.key) && (
+                <Button plain key={`output:${picked.key}`} label="Output" onPress={() => showOutput($, picked.key)} />
+              )}
+              {others > 0 && <Text dimColor>+{others}</Text>}
+            </Box>
+          </Box>
+        </Box>
+      )
+    }
+
+    // The band, then Run and Debug, at the pane's bottom edge.
     const withBand = (body: any) => {
-      if (!band) return body
       const keys: string[] = []
-      const text = unbutton(band, keys)
+      const text = band && unbutton(band, keys)
       return (
         <Box flexDirection="column" minHeight={e.props.scroll.bodyRows}>
           <Box flexDirection="column" flexGrow={1}>
             {body}
           </Box>
-          <Text dimColor wrap="truncate-end">
-            {'─'.repeat(e.props.bodyColumns)}
-          </Text>
-          <Box flexDirection="row" flexWrap="wrap" columnGap={2}>
-            {text}
-            {keys.map(k => (
-              <Button key={`band:${k}`} plain onPress={() => void bandAction($, k)}>
-                {k[0]!.toUpperCase() + k.slice(1)}
-              </Button>
-            ))}
-          </Box>
+          {band && rule}
+          {band && (
+            <Box flexDirection="row" flexWrap="wrap" columnGap={2}>
+              {text}
+              {keys.map(k => (
+                <Button key={`band:${k}`} plain onPress={() => void bandAction($, k)}>
+                  {k[0]!.toUpperCase() + k.slice(1)}
+                </Button>
+              ))}
+            </Box>
+          )}
+          {rule}
+          {runSection()}
         </Box>
+      )
+    }
+
+    const shown = output ? configs.find(l => l.key === output) : undefined
+    const run = output ? runs.get(output) : undefined
+    if (shown && run) {
+      const isLive = isRunning(shown.key)
+      return withBand(
+        <Box flexDirection="column">
+          <Box flexDirection="row" gap={1}>
+            <Button key="back" hotkey="b" onPress={() => showOutput($, null)}>
+              ← Back
+            </Button>
+            <Text bold wrap="truncate-end">
+              {shown.name}
+            </Text>
+            <Text dimColor>{isLive ? '(running)' : '(exited)'}</Text>
+          </Box>
+          <Code source={run.out.split('\n').slice(-e.props.scroll.bodyRows).join('\n')} format="source" wrap="truncate-end" />
+        </Box>,
       )
     }
 
@@ -370,7 +670,6 @@ export const register: Register = on => {
     }
 
     const list = await read($, repos)
-    const closed = await read($, collapsed)
     const total = list.reduce((n, r) => n + r.staged.length + r.changes.length, 0)
 
     const fileRow = (repo: Repo, c: Change, isStaged: boolean) => {
