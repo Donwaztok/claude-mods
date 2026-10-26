@@ -833,6 +833,9 @@ export const register: Register = on => {
                   </Text>
                 </Button>
                 <Box flexDirection="row" gap={1}>
+                  {repo.isRepo && (
+                    <Button plain key={`fetch:${repo.name}`} label="↻ Fetch" onPress={() => void git($, repo, ['fetch'], 'fetching')} />
+                  )}
                   {repo.behind > 0 && (
                     <Button plain key={`pull:${repo.name}`} label={`↓${repo.behind} Pull`} onPress={() => ask($, { repo: repo.name, op: 'pull' })} />
                   )}

@@ -178,6 +178,8 @@ test('the pane lists the workspace folders and opens a diff', async ($, on) => {
   await ui.press({ key: 'reveal:app:w:src/page.tsx' })
   expect(ran.some(r => r.includes('ShowItems array:string:file:///w/app/src/page.tsx'))).toBe(true)
   expect(await ui.find({ key: 'reveal:app:w:src/page.tsx' } as any)).toBeFalsy()
+  await ui.press({ key: 'fetch:app' })
+  expect(ran).toContain('git fetch')
   await ui.press({ key: 'push:app' })
   expect(ran).not.toContain('git push')
   expect(await ui.find({ type: 'Text', text: /Push 1 commit from dev\?/ })).toBeTruthy()

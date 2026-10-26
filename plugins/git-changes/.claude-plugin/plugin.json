@@ -1,1 +1,1 @@
-{ "name": "git-changes", "author": { "name": "Donwaztok" }, "version": "0.4.1", "description": "Source Control and Run and Debug pane for every folder in the project's .code-workspace", "types": "./types/index.d.ts" }
+{ "name": "git-changes", "author": { "name": "Donwaztok" }, "version": "0.4.2", "description": "Source Control and Run and Debug pane for every folder in the project's .code-workspace", "types": "./types/index.d.ts" }

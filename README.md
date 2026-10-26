@@ -10,6 +10,7 @@ Painel **Source Control** no estilo do VS Code. Lê os `folders` do `.code-works
 
 ![Diff de um arquivo](docs/git-changes-diff.png)
 
+- Em cada projeto, **↻ Fetch** busca o remoto sem pedir confirmação, e aí aparece o **↓N Pull**.
 - Em cada arquivo: **+**/**−** faz stage/unstage, **↶** descarta as mudanças (arquivo novo é apagado), sempre pedindo confirmação, e **⋯** abre um menu com **Reveal in File Explorer**.
 - Abre sozinho a partir de 144 colunas, ou com `/git-changes`.
 - Atualiza a cada 4 s e depois de cada ferramenta que o Claude roda.
