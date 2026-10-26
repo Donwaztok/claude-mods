@@ -834,13 +834,13 @@ export const register: Register = on => {
                 </Button>
                 <Box flexDirection="row" gap={1}>
                   {repo.isRepo && (
-                    <Button plain key={`fetch:${repo.name}`} label="↻ Fetch" onPress={() => void git($, repo, ['fetch'], 'fetching')} />
+                    <Button plain key={`fetch:${repo.name}`} label="Fetch" onPress={() => void git($, repo, ['fetch'], 'fetching')}>↻</Button>
                   )}
                   {repo.behind > 0 && (
-                    <Button plain key={`pull:${repo.name}`} label={`↓${repo.behind} Pull`} onPress={() => ask($, { repo: repo.name, op: 'pull' })} />
+                    <Button plain key={`pull:${repo.name}`} label={`Pull ${repo.behind}`} onPress={() => ask($, { repo: repo.name, op: 'pull' })}>{`↓${repo.behind}`}</Button>
                   )}
                   {repo.ahead > 0 && (
-                    <Button plain key={`push:${repo.name}`} label={`↑${repo.ahead} Push`} onPress={() => ask($, { repo: repo.name, op: 'push' })} />
+                    <Button plain key={`push:${repo.name}`} label={`Push ${repo.ahead}`} onPress={() => ask($, { repo: repo.name, op: 'push' })}>{`↑${repo.ahead}`}</Button>
                   )}
                   {count > 0 && <Text color="#3794ff">{count}</Text>}
                 </Box>
