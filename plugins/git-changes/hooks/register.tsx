@@ -396,6 +396,18 @@ async function git($: any, repo: Repo, args: string[], doing?: string) {
   await refresh($)
 }
 
+// VS Code's git.autofetch: every repo fetched quietly, so ↓ shows what Pull would bring. A failure (offline, no remote) stays silent.
+const AUTO_FETCH = 180_000
+async function autoFetch($: any) {
+  const list: Repo[] = await read($, repos)
+  await Promise.all(
+    list.filter(r => r.isRepo).map(r =>
+      $.process.run(['git', 'fetch', '--quiet'], { cwd: r.path, env: { GIT_TERMINAL_PROMPT: '0' } }).catch(() => null),
+    ),
+  )
+  await refresh($)
+}
+
 // Push/pull/discard waiting for a yes, as VS Code asks first. Module variable: a reload drops the question.
 let pending: { repo: string; op: 'push' | 'pull' } | { repo: string; op: 'discard'; change: Change } | null = null
 const ask = ($: any, value: typeof pending) => {
@@ -522,6 +534,7 @@ export const register: Register = on => {
     })
     void refresh($)
     $.clock.every(4000, () => void refresh($))
+    $.clock.every(AUTO_FETCH, () => void autoFetch($))
     void openPane($)
     return next(e)
   })
