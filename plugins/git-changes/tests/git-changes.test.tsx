@@ -1,6 +1,6 @@
 import { expect, test } from 'claude-code/testing'
 
-import { fadeOut, join, parseJsonc, parseStatus, toLaunches, toScripts, toTasks, unbutton } from '../hooks/register'
+import { fadeOut, join, parseJsonc, parseStatus, rowsOf, scrollThumb, toLaunches, toScripts, toTasks, unbutton } from '../hooks/register'
 
 const PANE = {
   plugin: 'git-changes',
@@ -101,6 +101,25 @@ test('tasks and npm scripts become commands', async () => {
   ])
 })
 
+test('the scrollbar counts the rows and places its thumb', async () => {
+  const col = (...children: any[]) => ({ type: 'Box', props: { flexDirection: 'column' }, children })
+  const row = (...children: any[]) => ({ type: 'Box', props: {}, children })
+  const tree = col(
+    { type: 'Text', children: ['a'] },
+    row({ type: 'Button', props: { label: '+' } }, { type: 'Text', children: ['M'] }),
+    false,
+    [{ type: 'Code', props: { source: '1\n2\n3' } }],
+  )
+  expect(rowsOf(tree)).toBe(5)
+  expect(rowsOf({ ...tree, props: { flexDirection: 'column', minHeight: 9 } })).toBe(9)
+  expect(scrollThumb(0, 10, 40)).toEqual({ top: 0, at: 0, size: 3 })
+  expect(scrollThumb(30, 10, 40)).toEqual({ top: 30, at: 7, size: 3 })
+  // the counted total short of the engine's (a wrapped band): the bar stays on the window, its thumb at the end
+  expect(scrollThumb(31, 10, 40)).toEqual({ top: 31, at: 7, size: 3 })
+  // the track between the two keys
+  expect(scrollThumb(30, 10, 40, 8)).toEqual({ top: 30, at: 6, size: 2 })
+})
+
 test("the band's buttons become text, and ponytail's commands are kept", async () => {
   const keys: string[] = []
   const band = {
@@ -160,7 +179,15 @@ test('the pane lists the workspace folders and opens a diff', async ($, on) => {
   await $.session.start({ cwd: '/w/app', surface: 'terminal', isInteractive: true })
   await $.command.run({ command: 'git-changes', args: '' } as any)
 
+  const short = await $.ui.mount({ ...PANE, props: { ...PANE.props, scroll: { offset: 0, bodyRows: 3 } }, surface: 'terminal' })
+  expect(JSON.stringify(await short.drawn())).toContain('┃')
+  expect(await short.find({ key: 'scroll:end' } as any)).toBeFalsy()
+  await short.unmount()
+  const paged = await $.ui.mount({ ...PANE, props: { ...PANE.props, scroll: { offset: 0, bodyRows: 6 } }, surface: 'terminal' })
+  for (const k of ['home', 'end']) expect(await paged.find({ key: `scroll:${k}` } as any)).toBeTruthy()
+  await paged.unmount()
   const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  expect(JSON.stringify(await ui.drawn())).not.toContain('┃')
   expect((await ui.find({ type: 'Text', text: /^app$/ }))?.text).toBe('app')
   expect((await ui.find({ type: 'Text', text: /^api$/ }))?.text).toBe('api')
   expect(await ui.find({ type: 'Text', text: /No changes/ })).toBeTruthy()

@@ -363,6 +363,28 @@ export function unbutton(node: any, keys: string[]): any {
   return { ...node, props, ...(children && { children }) }
 }
 
+// Rows a tree takes: a column Box sums its children, anything else is its tallest part.
+// shortcut: a Text that wraps or a flexWrap row counts as one row, so the thumb drifts there; measure if the engine ever reports it.
+export function rowsOf(node: any): number {
+  if (node == null || typeof node === 'boolean') return 0
+  if (typeof node !== 'object') return String(node).split('\n').length
+  if (node.type === 'Code') return String(node.props?.source ?? '').split('\n').length
+  const rows = (node.children ?? []).flat().map(rowsOf)
+  const own = node.type === 'Box' && node.props?.flexDirection === 'column'
+    ? rows.reduce((a: number, b: number) => a + b, 0)
+    : Math.max(node.type === 'Box' ? 0 : 1, ...rows)
+  return Math.max(own, typeof node.props?.minHeight === 'number' ? node.props.minHeight : 0)
+}
+
+// The scrollbar's thumb in a window of `rows` over `total` rows, on a track of `track` cells:
+// the window's top row, then the thumb's start and size on the track.
+// `top` is the engine's offset as is: `total` is counted and may be short, and the engine already keeps the window in the tree.
+export function scrollThumb(offset: number, rows: number, total: number, track = rows) {
+  const top = Math.max(0, offset)
+  const size = Math.max(1, Math.round((track * rows) / total))
+  return { top, at: Math.round(Math.min(1, top / (total - rows)) * (track - size)), size }
+}
+
 // Runs a git action, toasts its failure, then rescans so the pane follows.
 async function git($: any, repo: Repo, args: string[], doing?: string) {
   if (doing) $.ui.toast(`${repo.name}: ${doing}…`)
@@ -638,12 +660,31 @@ export const register: Register = on => {
       )
     }
 
+    // The engine scrolls the body but draws no bar: one in the last column, over the rows in view.
+    // Home at its top and End at its bottom, for the mouse; a pane too short for them has the track alone.
+    // shortcut: no Page Up/Down here, as $.ui.scroll takes no row and the plugin's own call skips its ui.scroll hook; the wheel and the keys page.
+    const scrollbar = (total: number) => {
+      const rows = e.props.scroll.bodyRows
+      const hasKeys = rows >= 4
+      const { top, at, size } = scrollThumb(e.props.scroll.offset, rows, total, hasKeys ? rows - 2 : rows)
+      const track = Array.from({ length: hasKeys ? rows - 2 : rows }, (_, i) =>
+        i >= at && i < at + size ? <Text color={TEXT}>┃</Text> : <Text dimColor>│</Text>,
+      )
+      return (
+        <Box position="absolute" top={top} right={0} flexDirection="column">
+          {hasKeys && <Button plain key="scroll:home" label="⤒" dimColor onPress={() => void $.ui.scroll({ in: PANE, to: 'start' })} />}
+          {track}
+          {hasKeys && <Button plain key="scroll:end" label="⤓" dimColor onPress={() => void $.ui.scroll({ in: PANE, to: 'end' })} />}
+        </Box>
+      )
+    }
+
     // The band, then Run and Debug, at the pane's bottom edge.
     const withBand = (body: any) => {
       const keys: string[] = []
       const text = band && unbutton(band, keys)
-      return (
-        <Box flexDirection="column" minHeight={e.props.scroll.bodyRows}>
+      const content = (
+        <Box flexDirection="column" flexGrow={1}>
           <Box flexDirection="column" flexGrow={1}>
             {body}
           </Box>
@@ -660,6 +701,15 @@ export const register: Register = on => {
           )}
           {rule}
           {runSection()}
+        </Box>
+      )
+      const rows = e.props.scroll.bodyRows
+      const total = rowsOf(content)
+      // the last column stays the bar's, so rows do not shift when it appears
+      return (
+        <Box flexDirection="column" minHeight={rows} paddingRight={1}>
+          {content}
+          {total > rows && scrollbar(total)}
         </Box>
       )
     }
@@ -714,8 +764,8 @@ export const register: Register = on => {
       const dir = c.path.includes('/') ? c.path.slice(0, c.path.lastIndexOf('/')) : ''
       const isDeleted = c.code === 'D'
       const rowKey = `${repo.name}:${isStaged ? 's' : 'w'}:${c.path}`
-      // one line: the indent, the name, a space, then ⋯ ↶ + M (staged: ⋯ − M)
-      const width = e.props.bodyColumns - 4 - 1 - (isStaged ? 5 : 7)
+      // one line: the indent, the name, a space, then ⋯ ↶ + M (staged: ⋯ − M), and the scrollbar's column
+      const width = e.props.bodyColumns - 1 - 4 - 1 - (isStaged ? 5 : 7)
       const label = fadeOut(
         [
           { text: basename(c.path), color: COLORS[c.code] ?? TEXT, strike: isDeleted },
