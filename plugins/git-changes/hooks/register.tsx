@@ -14,7 +14,7 @@ const selected = atom({ plugin: 'git-changes', key: 'selected' } as const, null)
 // While the pane is drawn, the band above the prompt (as the other plugins drew it) shows inside it.
 // Module variables, not $.state: a tree holds the other plugins' press handles, and a reload redraws both sites.
 let isShown = false
-let band: any = null
+let band: any[] | null = null
 let bandKey = ''
 
 // VS Code's gitDecoration colors
@@ -561,28 +561,30 @@ export const register: Register = on => {
     return closed
   })
 
-  // Pane open: the band's rows move into it, so the prompt gets the space. Closed: the band plus a reopen button.
+  // Pane closed: this plugin's row is a reopen button. Open: no row; the other rows move into the pane.
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
-    if (e.props.hasSurvey) return next(e)
-    const below = await next(e).catch(() => undefined)
+    if (e.props.hasSurvey || isShown) return next(e)
     const { Box, Button } = $.ui.resolve(e)
-    if (isShown) {
-      const key = JSON.stringify(below ?? null)
-      if (key !== bandKey) {
-        band = below ?? null
-        bandKey = key
-        $.ui.invalidate('ui.render')
-      }
-      return <Box />
-    }
-    const reopen = (
+    return (
       <Box flexDirection="row" justifyContent="flex-end">
         <Button key="git-changes-open" plain onPress={() => void openPane($)}>
           ⎇ Source Control
         </Button>
       </Box>
     )
-    return below ? <Box flexDirection="column">{below}{reopen}</Box> : reopen
+  })
+
+  // The band is one row per plugin, stacked here: while the pane is drawn they leave the band, so the prompt gets the space.
+  on('ui.render', { component: 'AbovePromptList' }, async ($, e, next) => {
+    if (e.props.hasSurvey || !isShown) return next(e)
+    const trees = e.props.rows.map(r => r.tree)
+    const key = JSON.stringify(trees)
+    if (key !== bandKey) {
+      band = trees.length ? trees : null
+      bandKey = key
+      $.ui.invalidate('ui.render')
+    }
+    return next({ ...e, props: { ...e.props, rows: [] } })
   })
 
   on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {
@@ -695,7 +697,7 @@ export const register: Register = on => {
     // The band, then Run and Debug, at the pane's bottom edge.
     const withBand = (body: any) => {
       const keys: string[] = []
-      const text = band && unbutton(band, keys)
+      const text = band?.map((t: any) => unbutton(t, keys))
       const content = (
         <Box flexDirection="column" flexGrow={1}>
           <Box flexDirection="column" flexGrow={1}>
